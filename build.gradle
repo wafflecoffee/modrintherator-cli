@@ -1,0 +1,40 @@
+plugins {
+  id 'java'
+  id 'application'
+  id 'com.github.johnrengelman.shadow' version '7.+'
+}
+
+sourceCompatibility = JavaVersion.VERSION_17
+targetCompatibility = JavaVersion.VERSION_17
+
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+  implementation 'commons-cli:commons-cli:1.5.0'
+  implementation 'com.google.code.gson:gson:2.8.9'
+  implementation 'org.tinylog:tinylog-api:2.4.1'
+  implementation 'org.tinylog:tinylog-impl:2.4.1'
+  implementation 'org.apache.commons:commons-lang3:3.12.0'
+  implementation 'org.kohsuke:github-api:1.301'
+  compileOnly 'org.jetbrains:annotations:22.0.0'
+}
+
+mainClassName = 'coffee.waffle.modrintherator.Main'
+version = '0.0.0'
+
+tasks.withType(JavaCompile).configureEach {
+  //noinspection all
+  it.options.release = 17
+}
+
+jar {
+  //noinspection GroovyAssignabilityCheck
+  manifest { attributes('Main-Class': mainClassName) }
+  from('LICENSE')
+}
+
+shadowJar {
+  from('LICENSE')
+}
