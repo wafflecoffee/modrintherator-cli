@@ -7,6 +7,7 @@ import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.lang3.StringUtils;
+import org.jetbrains.annotations.Nullable;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.tinylog.Logger;
@@ -25,14 +26,14 @@ public class Main {
 
     options.addOption("t", "token", true, "Modrinth token to use");
     options.addOption("g", "ghToken", true, "GitHub OAuth token to use");
-    options.addOption("p", "projectId", true, "Project of the ID to check");
+    options.addOption("p", "projectId", true, "ID of the project to check");
     options.addOption("s", "staging", false, "Whether to use staging API");
 
     final CommandLine cmd = parser.parse(options, args);
     final String token = cmd.hasOption("t") ?
             cmd.getOptionValue("t") :
             System.getenv("MODRINTH_TOKEN");
-    final String ghToken = cmd.hasOption("g") ?
+    @Nullable final String ghToken = cmd.hasOption("g") ?
             cmd.getOptionValue("g") :
             System.getenv("GITHUB_OAUTH");
     final String projectId = cmd.getOptionValue("p");
@@ -73,14 +74,15 @@ public class Main {
       throw new RuntimeException("Response code was not okay! Expected 200 but got " + code);
     }
 
-    Gson gson = new Gson();
-    return gson.fromJson(response.body(), Project.class);
+    return new Gson().fromJson(response.body(), Project.class);
   }
 
 
   @SuppressWarnings("ConstantConditions")
   private static void findIssues(Project project, String ghToken) throws IOException {
-    GitHub gh = new GitHubBuilder().withOAuthToken(ghToken).build();
+    final GitHub gh = ghToken == null ?
+            new GitHubBuilder().build() :
+            new GitHubBuilder().withOAuthToken(ghToken).build();
 
     if (project.status.equals("approved")) {
       Logger.info("Project is approved - no need to run this.");
@@ -89,18 +91,7 @@ public class Main {
     if (StringUtils.isEmpty(project.body) || project.body.length() < 100) {
       Logger.info("Issue found! A1: Description is too short");
     }
-    try {
-      final String trimmedSourceUrl = project.source_url.replaceAll("http(s)?://github\\.com/", "");
-      final String ghLicense = gh.getRepository(trimmedSourceUrl).getLicense().getName();
-
-      if (!ghLicense.equals(project.license.name)) {
-        Logger.info("Issue found! B3: License does not match source license");
-      }
-      if (ghLicense.equals("GNU General Public License v3.0") ||
-              ghLicense.equals("GNU Affero General Public License v3.0")) {
-        Logger.info("Issue found! Uses GPLv3 or AGPLv3");
-      }
-    } catch (NullPointerException ignored) {}
+    tryGHLicenseCheck(project, gh);
     if (!StringUtils.isAlphanumeric(project.slug) && !project.slug.contains("-")) {
       Logger.info("Issue found! C2: Slug is not alphanumeric");
     }
@@ -116,5 +107,27 @@ public class Main {
     if (project.versions.isEmpty() || project.versions.get(0).equals("")) {
       Logger.info("Issue found! D1: No versions");
     }
+  }
+
+  private static void tryGHLicenseCheck(Project project, GitHub gh) throws IOException {
+    try {
+      if (!StringUtils.contains(project.source_url, "github")) {
+        Logger.debug("No GitHub source found...");
+        return;
+      }
+
+      final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
+      final String ghLicense = gh.getRepository(trimmedSourceUrl).getLicense().getName()
+              .replaceAll("\".*\"( or \".*\")? License", "");
+
+      if (!ghLicense.equals(project.license.name) ||
+          !ghLicense.equals(project.license.name + ".0")) { // hack to account for LGPLv3 naming
+        Logger.info("Issue found! B3: License does not match source license");
+      }
+      if (ghLicense.equals("GNU General Public License v3.0") ||
+          ghLicense.equals("GNU Affero General Public License v3.0")) {
+        Logger.info("Issue found! Uses GPLv3 or AGPLv3");
+      }
+    } catch (NullPointerException ignored) {}
   }
 }
