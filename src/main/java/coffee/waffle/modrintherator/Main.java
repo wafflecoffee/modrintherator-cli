@@ -91,7 +91,9 @@ public class Main {
     if (StringUtils.isEmpty(project.body) || project.body.length() < 100) {
       Logger.info("Issue found! A1: Description is too short");
     }
-    tryGHLicenseCheck(project, gh);
+    if (StringUtils.contains(project.source_url, "github")) {
+      tryGHLicenseCheck(project, gh);
+    }
     if (!StringUtils.isAlphanumeric(project.slug) && !project.slug.contains("-")) {
       Logger.info("Issue found! C2: Slug is not alphanumeric");
     }
@@ -111,17 +113,12 @@ public class Main {
 
   private static void tryGHLicenseCheck(Project project, GitHub gh) throws IOException {
     try {
-      if (!StringUtils.contains(project.source_url, "github")) {
-        Logger.debug("No GitHub source found...");
-        return;
-      }
-
       final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
       final String ghLicense = gh.getRepository(trimmedSourceUrl).getLicense().getName()
               .replaceAll("\".*\"( or \".*\")? License", "");
 
-      if (!ghLicense.equals(project.license.name) ||
-          !ghLicense.equals(project.license.name + ".0")) { // hack to account for LGPLv3 naming
+      if (!(ghLicense.equals(project.license.name) ||
+          ghLicense.equals(project.license.name + ".0"))) { // hack to account for LGPLv3 naming
         Logger.info("Issue found! B3: License does not match source license");
       }
       if (ghLicense.equals("GNU General Public License v3.0") ||

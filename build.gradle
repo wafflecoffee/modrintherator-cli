@@ -22,7 +22,7 @@ dependencies {
 }
 
 mainClassName = 'coffee.waffle.modrintherator.Main'
-version = '0.0.0'
+version = '0.1.0'
 
 tasks.withType(JavaCompile).configureEach {
   //noinspection all
