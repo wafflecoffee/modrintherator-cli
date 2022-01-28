@@ -6,13 +6,13 @@ Copyright 2022 Emmaffle, [zlib license](LICENSE).
 
 ## Usage
 
-`java -jar modrintherator-cli.jar -p AABBCCDD`
+Examples of possible valid usages:
+`java -jar modrintherator-cli.jar AABBCCDD`
+`java -jar modrintherator-cli.jar https://modrinth.com/mod/AABBCCDD`
 
-### Options
+`java -jar modrintherator-cli.jar EEFFGGHH`
+`java -jar modrintherator-cli.jar EEFFGGHH --staging`
+`java -jar modrintherator-cli.jar https://staging.modrinth.com/mod/EEFFGGHH`
 
-| Short option | Long option   | Has argument? | Default           | Nullable?     | Description                |
-|--------------|---------------|---------------|-------------------|---------------|----------------------------|
-| `-t`         | `--token`     | Yes           | `$MODRINTH_TOKEN` | No            | Modrinth token to use      |
-| `-g`         | `--ghToken`   | Yes           | `$GITHUB_OAUTH`   | Yes           | GitHub OAuth token to use  |
-| `-p`         | `--projectId` | Yes           | None              | No            | ID of the project to check |
-| `-s`         | `--staging`   | No            | False             | False if null | Whether to use staging API |
+Set the `$MODRINTH_TOKEN` environment variable to your Modrinth token, and the `$GITHUB_OAUTH` environment variable to
+your GitHub OAuth token (can be obtained from `gh auth status -t` with the GitHub CLI, and is not required).

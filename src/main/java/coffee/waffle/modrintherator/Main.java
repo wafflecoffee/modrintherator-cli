@@ -1,13 +1,6 @@
 package coffee.waffle.modrintherator;
 
 import com.google.gson.Gson;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.DefaultParser;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
-import org.apache.commons.lang3.StringUtils;
-import org.jetbrains.annotations.Nullable;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.tinylog.Logger;
@@ -18,33 +11,27 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 
 public class Main {
-  public static void main(String[] args) throws ParseException, IOException, InterruptedException {
-    final Options options = new Options();
-    final CommandLineParser parser = new DefaultParser();
+  public static void main(String[] args) throws IOException, InterruptedException {
+    final String token = System.getenv("MODRINTH_TOKEN");
+    final String ghToken = System.getenv("GITHUB_OAUTH");
 
-    options.addOption("t", "token", true, "Modrinth token to use");
-    options.addOption("g", "ghToken", true, "GitHub OAuth token to use");
-    options.addOption("p", "projectId", true, "ID of the project to check");
-    options.addOption("s", "staging", false, "Whether to use staging API");
-
-    final CommandLine cmd = parser.parse(options, args);
-    final String token = cmd.hasOption("t") ?
-            cmd.getOptionValue("t") :
-            System.getenv("MODRINTH_TOKEN");
-    @Nullable final String ghToken = cmd.hasOption("g") ?
-            cmd.getOptionValue("g") :
-            System.getenv("GITHUB_OAUTH");
-    final String projectId = cmd.getOptionValue("p");
-    final String apiUrl = cmd.hasOption("s") ?
-            "https://staging-api.modrinth.com/v2/project/" :
-            "https://api.modrinth.com/api/v1/mod/";
-
-    if (token == null || projectId == null) {
+    final List<String> arguments = Arrays.stream(args).toList();
+    if (arguments.isEmpty() || !token.startsWith("gho_")) {
       Logger.error("Token or project ID are null");
       throw new RuntimeException("Token or project ID are null");
     }
+
+    final boolean staging = arguments.contains("staging");
+    final String projectId = arguments.get(0).replaceAll(
+            "(http(s)?://)?(staging)?(-)?(api)?(\\.)?modrinth\\.com/(api/)?(v1/|v2/)?(mod|modpack)?/",
+            "");
+    final String apiUrl = staging ?
+            "https://staging-api.modrinth.com/v2/project/" :
+            "https://api.modrinth.com/api/v1/mod/";
 
     HttpResponse<String> response = request(token, apiUrl + projectId);
     Project project = parse(response);
@@ -77,8 +64,6 @@ public class Main {
     return new Gson().fromJson(response.body(), Project.class);
   }
 
-
-  @SuppressWarnings("ConstantConditions")
   private static void findIssues(Project project, String ghToken) throws IOException {
     final GitHub gh = ghToken == null ?
             new GitHubBuilder().build() :
@@ -86,45 +71,51 @@ public class Main {
 
     if (project.status.equals("approved")) {
       Logger.info("Project is approved - no need to run this.");
-      return;
     }
-    if (StringUtils.isEmpty(project.body) || project.body.length() < 100) {
+    if (isNothing(project.body) || project.body.length() < 100) {
       Logger.info("Issue found! A1: Description is too short");
     }
-    if (StringUtils.contains(project.source_url, "github")) {
-      tryGHLicenseCheck(project, gh);
+    if (isNothing(project.source_url) && project.license.name.contains("Public License")) {
+      Logger.info("Issue found! B2: Project has copyleft license, but doesn't provide sources");
     }
-    if (!StringUtils.isAlphanumeric(project.slug) && !project.slug.contains("-")) {
+    if (!isNothing(project.source_url) && project.source_url.contains("github")) {
+      final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
+      final String ghLicense = gh.getRepository(trimmedSourceUrl).getLicense().getName()
+              .replaceAll("\".*\"( or \".*\")? License", "");
+
+      if (ghLicense.matches(project.license.name + "(.0)?")) {
+        Logger.info("Issue found! B3: License does not match source license");
+      }
+      if (ghLicense.matches("GNU (Affero )?General Public License v3\\.0")) {
+        Logger.info("Issue found! Uses GPLv3 or AGPLv3");
+      }
+    }
+    if (project.license.name.contains("Custom")) {
+      Logger.info("Potential issue found! B4: License may be crayon");
+    }
+    if (!project.slug.matches("[\\-a-zA-Z0-9_]")) { // FIXME this isn't matching dashes
       Logger.info("Issue found! C2: Slug is not alphanumeric");
     }
-    try {
-      if (!project.source_url.contains("http") ||
-          !project.issues_url.contains("http") ||
-          !project.wiki_url.contains("http") ||
-          !project.discord_url.contains("http") ||
-          !project.discord_url.contains("discord")) {
-        Logger.info("Issue found! C2: Broken links");
-      }
-    } catch (NullPointerException ignored) {}
+    if (!isNothing(project.source_url) && !project.source_url.contains("http")) {
+      Logger.info("Issue found! C2: Broken source link");
+    }
+    if (!isNothing(project.issues_url) && !project.issues_url.contains("http")) {
+      Logger.info("Issue found! C2: Broken issues link");
+    }
+    if (!isNothing(project.wiki_url) && !project.wiki_url.contains("http")) {
+      Logger.info("Issue found! C2: Broken wiki link");
+    }
+    if (!isNothing(project.discord_url) &&
+        !project.discord_url.contains("http") &&
+        !project.discord_url.contains("discord")) {
+      Logger.info("Issue found! C2: Broken Discord link");
+    }
     if (project.versions.isEmpty() || project.versions.get(0).equals("")) {
       Logger.info("Issue found! D1: No versions");
     }
   }
 
-  private static void tryGHLicenseCheck(Project project, GitHub gh) throws IOException {
-    try {
-      final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
-      final String ghLicense = gh.getRepository(trimmedSourceUrl).getLicense().getName()
-              .replaceAll("\".*\"( or \".*\")? License", "");
-
-      if (!(ghLicense.equals(project.license.name) ||
-          ghLicense.equals(project.license.name + ".0"))) { // hack to account for LGPLv3 naming
-        Logger.info("Issue found! B3: License does not match source license");
-      }
-      if (ghLicense.equals("GNU General Public License v3.0") ||
-          ghLicense.equals("GNU Affero General Public License v3.0")) {
-        Logger.info("Issue found! Uses GPLv3 or AGPLv3");
-      }
-    } catch (NullPointerException ignored) {}
+  private static boolean isNothing(String s) {
+    return s == null || s.isEmpty();
   }
 }
