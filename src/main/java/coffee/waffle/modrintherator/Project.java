@@ -6,13 +6,10 @@ import org.jetbrains.annotations.Nullable;
 @ApiStatus.Internal
 final class Project {
   String slug;
-  @Nullable String body;
-  String status;
+  String title;
+  @Nullable Object moderator_message;
   License license;
-  @Nullable String issues_url;
   @Nullable String source_url;
-  @Nullable String wiki_url;
-  @Nullable String discord_url;
 
   static class License {
     String id;

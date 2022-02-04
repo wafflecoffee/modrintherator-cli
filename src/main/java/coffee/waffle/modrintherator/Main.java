@@ -1,11 +1,14 @@
 package coffee.waffle.modrintherator;
 
 import com.google.gson.Gson;
+import org.kohsuke.github.GHFileNotFoundException;
 import org.kohsuke.github.GHLicense;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.tinylog.Logger;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -19,24 +22,29 @@ import java.util.Locale;
 public class Main {
   private static final String MODRINTH_TOKEN = System.getenv("MODRINTH_TOKEN");
   private static final String GITHUB_TOKEN = System.getenv("GITHUB_OAUTH");
+  private static final String API_BASE = "https://api.modrinth.com/v2/project/";
 
   public static void main(String[] args) throws IOException, InterruptedException {
     final List<String> arguments = Arrays.stream(args).toList();
-    if (arguments.isEmpty() || !MODRINTH_TOKEN.startsWith("gho_")) {
-      Logger.error("Token or project ID are invalid");
-      throw new RuntimeException("Token or project ID are invalid");
+    final GitHub gh = new GitHubBuilder().withOAuthToken(GITHUB_TOKEN).build();
+
+    for (String id : arguments) {
+      HttpResponse<String> response = request(API_BASE + id);
+      Project project = new Gson().fromJson(response.body(), Project.class);
+
+      if (project == null ||
+        project.slug == null ||
+        project.source_url == null ||
+        !project.source_url.contains("github") ||
+        project.moderator_message != null ||
+        project.source_url.startsWith("/") ||
+        project.source_url.endsWith("/") ||
+        !project.source_url.matches(".*/.*")) {
+        continue;
+      }
+      Logger.info(project.source_url);
+      findIssues(project, gh);
     }
-
-    final String projectId = arguments.get(0).replaceAll(
-            "(http(s)?://)?(staging)?(-)?(api)?(\\.)?modrinth\\.com/(api/)?(v1/|v2/)?(mod|modpack)?/",
-            "");
-    final String apiUrl = arguments.contains("staging") ?
-            "https://staging-api.modrinth.com/v2/project/" :
-            "https://api.modrinth.com/v2/project/";
-
-    HttpResponse<String> response = request(apiUrl + projectId);
-    Project project = parse(response);
-    findIssues(project);
   }
 
   private static HttpResponse<String> request(String apiUrl) throws IOException, InterruptedException {
@@ -56,64 +64,39 @@ public class Main {
     return client.send(request, HttpResponse.BodyHandlers.ofString());
   }
 
-  private static Project parse(HttpResponse<String> response) {
-    final int code = response.statusCode();
-    if (code != 200) {
-      throw new RuntimeException("Response code was not okay! Expected 200 but got " + code);
+  private static void findIssues(Project project, GitHub gh) throws IOException {
+    final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
+    GHLicense ghLicense;
+    try {
+      ghLicense = gh.getRepository(trimmedSourceUrl).getLicense();
+    } catch (GHFileNotFoundException e) { return; }
+    if (ghLicense == null) {
+      return;
     }
+    final String ghLicenseName = ghLicense.getName().replaceAll("\".*\"( or \".*\")? License", "");
+    final String ghLicenseKey = ghLicense.getKey().toUpperCase(Locale.ROOT);
 
-    return new Gson().fromJson(response.body(), Project.class);
-  }
-
-  private static void findIssues(Project project) throws IOException {
-    if (project.status.equals("approved")) {
-      Logger.info("Project is approved - no need to run this.");
+    if (ghLicenseName.matches("GNU (Affero )?General Public License v3\\.0")) {
+      Logger.info(project.title + " uses the " + ghLicenseKey);
+      BufferedWriter writer = new BufferedWriter(new FileWriter("gpl.sh", true));
+      writer.append("mpatch '{\"moderator_message\":\"\\[Automatic\\] GPL usage\"," +
+        "\"moderator_message_body\":\"\\[Automated message - if this is an error, feel free to dismiss.\\] " +
+        "GPL invalid yadda yadda\"}' " + API_BASE).append(project.slug).append("\n");
+      writer.close();
+      return;
     }
-    if (isNothing(project.body) || project.body.length() < 100) {
-      Logger.info("Issue found! A1: Description is too short");
-    }
-    if (isNothing(project.source_url) && project.license.name.contains("Public License")) {
-      Logger.info("Issue found! B2: Project uses the " + project.license.id.toUpperCase(Locale.ROOT) + ", but doesn't provide sources");
-    }
-    if (!isNothing(project.source_url) && project.source_url.contains("github")) {
-      final GitHub gh = GITHUB_TOKEN == null ?
-              new GitHubBuilder().build() :
-              new GitHubBuilder().withOAuthToken(GITHUB_TOKEN).build();
-      final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
-      final GHLicense ghLicense = gh.getRepository(trimmedSourceUrl).getLicense();
-      final String ghLicenseName = ghLicense.getName().replaceAll("\".*\"( or \".*\")? License", "");
-      final String ghLicenseKey = ghLicense.getKey().toUpperCase(Locale.ROOT);
-
-      if (!ghLicenseName.matches(project.license.name + "(.0)?")) {
-        Logger.info("Issue found! B3: License " + project.license.id + " does not match source license " + ghLicenseKey);
-      }
-      if (ghLicenseName.matches("GNU (Affero )?General Public License v3\\.0")) {
-        Logger.info("Issue found! Project uses the " + ghLicenseKey);
-      }
-    }
-    if (project.license.name.contains("Custom")) {
-      Logger.info("Potential issue found! B4: License may be crayon");
-    }
-    if (!project.slug.matches("[-a-zA-Z0-9_]{3,20}")) {
-      Logger.info("Issue found! C2: Slug " + project.slug + " is not alphanumeric");
-    }
-    if (!isNothing(project.source_url) && !project.source_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken source link: " + project.source_url);
-    }
-    if (!isNothing(project.issues_url) && !project.issues_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken issues link: " + project.issues_url);
-    }
-    if (!isNothing(project.wiki_url) && !project.wiki_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken wiki link: " + project.wiki_url);
-    }
-    if (!isNothing(project.discord_url) &&
-        !project.discord_url.contains("http") &&
-        !project.discord_url.contains("discord")) {
-      Logger.info("Issue found! C2: Broken Discord link: " + project.discord_url);
+    if (!ghLicenseName.matches(project.license.name + "(.0)?")) {
+      Logger.info(project.title + "'s " + project.license.id.toUpperCase(Locale.ROOT) +
+        " does not match GitHub license " + ghLicenseKey);
+      BufferedWriter writer = new BufferedWriter(new FileWriter("incorrect.sh", true));
+      writer.append("mpatch '{\"moderator_message\":\"\\[Automatic\\] Incorrect license listed\"," +
+        "\"moderator_message_body\":\"\\[Automated message - if this is an error, feel free to dismiss.\\] " +
+        "This mod has the license of ").append(project.license.id.toUpperCase(Locale.ROOT))
+        .append(", but its GitHub repository has the ").append(ghLicenseKey)
+        .append(" license. Please make sure this lines up across the board.\"}' ").append(API_BASE)
+        .append(project.slug).append("\n");
+      writer.close();
     }
   }
 
-  private static boolean isNothing(String s) {
-    return s == null || s.isEmpty();
-  }
 }
