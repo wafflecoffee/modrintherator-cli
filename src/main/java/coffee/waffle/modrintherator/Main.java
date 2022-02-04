@@ -1,6 +1,7 @@
 package coffee.waffle.modrintherator;
 
 import com.google.gson.Gson;
+import org.kohsuke.github.GHLicense;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.tinylog.Logger;
@@ -13,32 +14,32 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 public class Main {
-  public static void main(String[] args) throws IOException, InterruptedException {
-    final String token = System.getenv("MODRINTH_TOKEN");
-    final String ghToken = System.getenv("GITHUB_OAUTH");
+  private static final String MODRINTH_TOKEN = System.getenv("MODRINTH_TOKEN");
+  private static final String GITHUB_TOKEN = System.getenv("GITHUB_OAUTH");
 
+  public static void main(String[] args) throws IOException, InterruptedException {
     final List<String> arguments = Arrays.stream(args).toList();
-    if (arguments.isEmpty() || !token.startsWith("gho_")) {
-      Logger.error("Token or project ID are null");
-      throw new RuntimeException("Token or project ID are null");
+    if (arguments.isEmpty() || !MODRINTH_TOKEN.startsWith("gho_")) {
+      Logger.error("Token or project ID are invalid");
+      throw new RuntimeException("Token or project ID are invalid");
     }
 
-    final boolean staging = arguments.contains("staging");
     final String projectId = arguments.get(0).replaceAll(
             "(http(s)?://)?(staging)?(-)?(api)?(\\.)?modrinth\\.com/(api/)?(v1/|v2/)?(mod|modpack)?/",
             "");
-    final String apiUrl = staging ?
+    final String apiUrl = arguments.contains("staging") ?
             "https://staging-api.modrinth.com/v2/project/" :
-            "https://api.modrinth.com/api/v1/mod/";
+            "https://api.modrinth.com/v2/project/";
 
-    HttpResponse<String> response = request(token, apiUrl + projectId);
+    HttpResponse<String> response = request(apiUrl + projectId);
     Project project = parse(response);
-    findIssues(project, ghToken);
+    findIssues(project);
   }
 
-  private static HttpResponse<String> request(String token, String apiUrl) throws IOException, InterruptedException {
+  private static HttpResponse<String> request(String apiUrl) throws IOException, InterruptedException {
     final HttpClient client = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_2)
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -47,7 +48,7 @@ public class Main {
 
     final HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(apiUrl))
-            .header("Authorization", token)
+            .header("Authorization", MODRINTH_TOKEN)
             .header("Accept", "application/json")
             .GET()
             .build();
@@ -64,11 +65,7 @@ public class Main {
     return new Gson().fromJson(response.body(), Project.class);
   }
 
-  private static void findIssues(Project project, String ghToken) throws IOException {
-    final GitHub gh = ghToken == null ?
-            new GitHubBuilder().build() :
-            new GitHubBuilder().withOAuthToken(ghToken).build();
-
+  private static void findIssues(Project project) throws IOException {
     if (project.status.equals("approved")) {
       Logger.info("Project is approved - no need to run this.");
     }
@@ -76,42 +73,43 @@ public class Main {
       Logger.info("Issue found! A1: Description is too short");
     }
     if (isNothing(project.source_url) && project.license.name.contains("Public License")) {
-      Logger.info("Issue found! B2: Project has copyleft license, but doesn't provide sources");
+      Logger.info("Issue found! B2: Project uses the " + project.license.id.toUpperCase(Locale.ROOT) + ", but doesn't provide sources");
     }
     if (!isNothing(project.source_url) && project.source_url.contains("github")) {
+      final GitHub gh = GITHUB_TOKEN == null ?
+              new GitHubBuilder().build() :
+              new GitHubBuilder().withOAuthToken(GITHUB_TOKEN).build();
       final String trimmedSourceUrl = project.source_url.replaceAll("(http(s)?://)?github\\.com/", "");
-      final String ghLicense = gh.getRepository(trimmedSourceUrl).getLicense().getName()
-              .replaceAll("\".*\"( or \".*\")? License", "");
+      final GHLicense ghLicense = gh.getRepository(trimmedSourceUrl).getLicense();
+      final String ghLicenseName = ghLicense.getName().replaceAll("\".*\"( or \".*\")? License", "");
+      final String ghLicenseKey = ghLicense.getKey().toUpperCase(Locale.ROOT);
 
-      if (ghLicense.matches(project.license.name + "(.0)?")) {
-        Logger.info("Issue found! B3: License does not match source license");
+      if (!ghLicenseName.matches(project.license.name + "(.0)?")) {
+        Logger.info("Issue found! B3: License " + project.license.id + " does not match source license " + ghLicenseKey);
       }
-      if (ghLicense.matches("GNU (Affero )?General Public License v3\\.0")) {
-        Logger.info("Issue found! Uses GPLv3 or AGPLv3");
+      if (ghLicenseName.matches("GNU (Affero )?General Public License v3\\.0")) {
+        Logger.info("Issue found! Project uses the " + ghLicenseKey);
       }
     }
     if (project.license.name.contains("Custom")) {
       Logger.info("Potential issue found! B4: License may be crayon");
     }
-    if (!project.slug.matches("[\\-a-zA-Z0-9_]")) { // FIXME this isn't matching dashes
-      Logger.info("Issue found! C2: Slug is not alphanumeric");
+    if (!project.slug.matches("[-a-zA-Z0-9_]{3,20}")) {
+      Logger.info("Issue found! C2: Slug " + project.slug + " is not alphanumeric");
     }
     if (!isNothing(project.source_url) && !project.source_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken source link");
+      Logger.info("Issue found! C2: Broken source link: " + project.source_url);
     }
     if (!isNothing(project.issues_url) && !project.issues_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken issues link");
+      Logger.info("Issue found! C2: Broken issues link: " + project.issues_url);
     }
     if (!isNothing(project.wiki_url) && !project.wiki_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken wiki link");
+      Logger.info("Issue found! C2: Broken wiki link: " + project.wiki_url);
     }
     if (!isNothing(project.discord_url) &&
         !project.discord_url.contains("http") &&
         !project.discord_url.contains("discord")) {
-      Logger.info("Issue found! C2: Broken Discord link");
-    }
-    if (project.versions.isEmpty() || project.versions.get(0).equals("")) {
-      Logger.info("Issue found! D1: No versions");
+      Logger.info("Issue found! C2: Broken Discord link: " + project.discord_url);
     }
   }
 
