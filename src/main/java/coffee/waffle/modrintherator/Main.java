@@ -23,16 +23,13 @@ public class Main {
   public static void main(String[] args) throws IOException, InterruptedException {
     final List<String> arguments = Arrays.stream(args).toList();
     if (arguments.isEmpty() || !MODRINTH_TOKEN.startsWith("gho_")) {
-      Logger.error("Token or project ID are invalid");
       throw new RuntimeException("Token or project ID are invalid");
     }
 
     final String projectId = arguments.get(0).replaceAll(
-            "(http(s)?://)?(staging)?(-)?(api)?(\\.)?modrinth\\.com/(api/)?(v1/|v2/)?(mod|modpack)?/",
+            "(http(s)?://)?(staging|rewrite)?(-)?(api)?(\\.)?modrinth\\.com/(api/)?(v1/|v2/)?(mod|modpack|project)?/",
             "");
-    final String apiUrl = arguments.contains("staging") ?
-            "https://staging-api.modrinth.com/v2/project/" :
-            "https://api.modrinth.com/v2/project/";
+    final String apiUrl = "https://" + (arguments.contains("staging") ? "staging" : "") + "api.modrinth.com/v2/project/";
 
     HttpResponse<String> response = request(apiUrl + projectId);
     Project project = parse(response);
@@ -97,18 +94,7 @@ public class Main {
     if (!project.slug.matches("[-a-zA-Z0-9_]{3,20}")) {
       Logger.info("Issue found! C2: Slug " + project.slug + " is not alphanumeric");
     }
-    if (!isNothing(project.source_url) && !project.source_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken source link: " + project.source_url);
-    }
-    if (!isNothing(project.issues_url) && !project.issues_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken issues link: " + project.issues_url);
-    }
-    if (!isNothing(project.wiki_url) && !project.wiki_url.contains("http")) {
-      Logger.info("Issue found! C2: Broken wiki link: " + project.wiki_url);
-    }
-    if (!isNothing(project.discord_url) &&
-        !project.discord_url.contains("http") &&
-        !project.discord_url.contains("discord")) {
+    if (!isNothing(project.discord_url) && !project.discord_url.contains("discord")) {
       Logger.info("Issue found! C2: Broken Discord link: " + project.discord_url);
     }
   }
